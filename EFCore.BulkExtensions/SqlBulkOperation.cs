@@ -155,6 +155,151 @@ namespace EFCore.BulkExtensions
             }
         }
 
+        // IQueryable Support
+        public static void Insert<T>(DbContext context, IQueryable<T> query, TableInfo tableInfo, Action<long, bool> progress)
+        {
+            var sqlConnection = OpenAndGetSqlConnection(context);
+            var transaction = context.Database.CurrentTransaction;
+
+            try
+            {
+                using (var sqlBulkCopy = GetSqlBulkCopy(sqlConnection, transaction, tableInfo.BulkConfig.SqlBulkCopyOptions))
+                {
+                    bool hasOwnedTypes = !tableInfo.HasOwnedTypes;
+                    tableInfo.SetSqlBulkCopyConfig(sqlBulkCopy, hasOwnedTypes, progress);
+                    if (!hasOwnedTypes)
+                    {
+                        using (var reader = ObjectReaderEx.Create(query, tableInfo.ShadowProperties, tableInfo.ConvertibleProperties, context, tableInfo.PropertyColumnNamesDict.Keys.ToArray()))
+                        {
+                            sqlBulkCopy.WriteToServer(reader);
+                        }
+                    }
+                    else // With OwnedTypes DataTable is used since library FastMember can not (https://github.com/mgravell/fast-member/issues/21)
+                    {
+                        var dataTable = GetDataTable(context, query.ToList());
+                        sqlBulkCopy.WriteToServer(dataTable);
+                    }
+
+                }
+            }
+            finally
+            {
+                if (transaction == null)
+                {
+                    sqlConnection.Close();
+                }
+            }
+        }
+
+        public static async Task InsertAsync<T>(DbContext context, IQueryable<T> query, TableInfo tableInfo, Action<long, bool> progress)
+        {
+            var sqlConnection = await OpenAndGetSqlConnectionAsync(context);
+            var transaction = context.Database.CurrentTransaction;
+            try
+            {
+                using (var sqlBulkCopy = GetSqlBulkCopy(sqlConnection, transaction, tableInfo.BulkConfig.SqlBulkCopyOptions))
+                {
+                    bool setColumnMapping = !tableInfo.HasOwnedTypes;
+                    tableInfo.SetSqlBulkCopyConfig(sqlBulkCopy, setColumnMapping, progress);
+                    if (!tableInfo.HasOwnedTypes)
+                    {
+                        using (var reader = ObjectReaderEx.Create(query, tableInfo.ShadowProperties, tableInfo.ConvertibleProperties, context, tableInfo.PropertyColumnNamesDict.Keys.ToArray()))
+                        {
+                            await sqlBulkCopy.WriteToServerAsync(reader).ConfigureAwait(false);
+                        }
+                    }
+                    else
+                    {
+                        var dataTable = GetDataTable<T>(context, await query.ToListAsync());
+                        await sqlBulkCopy.WriteToServerAsync(dataTable);
+                    }
+                }
+            }
+            finally
+            {
+                if (transaction == null)
+                {
+                    sqlConnection.Close();
+                }
+            }
+        }
+
+        public static void Merge<T>(DbContext context, IQueryable<T> query, TableInfo tableInfo, OperationType operationType, Action<long, bool> progress) where T : class
+        {
+            tableInfo.InsertToTempTable = false;
+            tableInfo.BulkConfig.SetOutputIdentity = false;
+
+            if ((tableInfo.BulkConfig.UpdateByProperties?.Count() ?? 0) == 0)
+            {
+                tableInfo.CheckHasIdentity(context);
+            }
+
+            if (tableInfo.BulkConfig.SetOutputIdentity)
+            {
+                context.Database.ExecuteSqlCommand(SqlQueryBuilder.CreateTableCopy(tableInfo.FullTableName, tableInfo.FullTempOutputTableName, tableInfo, true));
+            }
+
+            try
+            {
+                context.Database.ExecuteSqlCommand(SqlQueryBuilder.MergeTable(tableInfo, query, operationType));
+
+                if (tableInfo.BulkConfig.SetOutputIdentity && tableInfo.HasSinglePrimaryKey)
+                {
+                    try
+                    {
+                        //tableInfo.UpdateOutputIdentity(context, entities);
+                    }
+                    finally
+                    {
+                        if (!tableInfo.BulkConfig.UseTempDB)
+                            context.Database.ExecuteSqlCommand(SqlQueryBuilder.DropTable(tableInfo.FullTempOutputTableName));
+                    }
+                }
+            }
+            finally
+            {
+                if (!tableInfo.BulkConfig.UseTempDB)
+                    context.Database.ExecuteSqlCommand(SqlQueryBuilder.DropTable(tableInfo.FullTempTableName));
+            }
+        }
+
+        public static async Task MergeAsync<T>(DbContext context, IQueryable<T> query, TableInfo tableInfo, OperationType operationType, Action<long, bool> progress) where T : class
+        {
+            tableInfo.InsertToTempTable = false;
+            tableInfo.BulkConfig.SetOutputIdentity = false;
+
+            if ((tableInfo.BulkConfig.UpdateByProperties?.Count() ?? 0) == 0)
+            {
+                await tableInfo.CheckHasIdentityAsync(context).ConfigureAwait(false);
+            }
+
+            if (tableInfo.BulkConfig.SetOutputIdentity && tableInfo.HasIdentity)
+            {
+                await context.Database.ExecuteSqlCommandAsync(SqlQueryBuilder.CreateTableCopy(tableInfo.FullTableName, tableInfo.FullTempOutputTableName, tableInfo, true)).ConfigureAwait(false);
+            }
+
+            try
+            {
+                await context.Database.ExecuteSqlCommandAsync(SqlQueryBuilder.MergeTable(tableInfo, query, operationType)).ConfigureAwait(false);
+
+                if (tableInfo.BulkConfig.SetOutputIdentity && tableInfo.HasIdentity)
+                {
+                    try
+                    {
+                        //await tableInfo.UpdateOutputIdentityAsync(context, entities).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        await context.Database.ExecuteSqlCommandAsync(SqlQueryBuilder.DropTable(tableInfo.FullTempOutputTableName)).ConfigureAwait(false);
+                    }
+                }
+            }
+            finally
+            {
+                await context.Database.ExecuteSqlCommandAsync(SqlQueryBuilder.DropTable(tableInfo.FullTempTableName)).ConfigureAwait(false);
+            }
+        }
+
         // IMPORTANT: works only if Properties of Entity are in the same order as Columns in Db
         internal static DataTable GetDataTable<T>(DbContext context, IList<T> entities)
         {

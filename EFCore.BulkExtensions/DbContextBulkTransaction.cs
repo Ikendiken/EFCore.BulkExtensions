@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 
@@ -32,6 +33,35 @@ namespace EFCore.BulkExtensions
             else
             {
                 return SqlBulkOperation.MergeAsync(context, entities, tableInfo, operationType, progress);
+            }
+        }
+
+        // IQueryable Support
+        public static void Execute<T>(DbContext context, IQueryable<T> query, OperationType operationType, BulkConfig bulkConfig, Action<long, bool> progress) where T : class
+        {
+            TableInfo tableInfo = TableInfo.CreateInstance(context, query, operationType, bulkConfig);
+
+            if (operationType == OperationType.Insert && !tableInfo.BulkConfig.SetOutputIdentity)
+            {
+                SqlBulkOperation.Insert(context, query, tableInfo, progress);
+            }
+            else
+            {
+                SqlBulkOperation.Merge(context, query, tableInfo, operationType, progress);
+            }
+        }
+
+        public static Task ExecuteAsync<T>(DbContext context, IQueryable<T> query, OperationType operationType, BulkConfig bulkConfig, Action<long, bool> progress) where T : class
+        {
+            TableInfo tableInfo = TableInfo.CreateInstance(context, query, operationType, bulkConfig);
+
+            if (operationType == OperationType.Insert && !tableInfo.BulkConfig.SetOutputIdentity)
+            {
+                return SqlBulkOperation.InsertAsync(context, query, tableInfo, progress);
+            }
+            else
+            {
+                return SqlBulkOperation.MergeAsync(context, query, tableInfo, operationType, progress);
             }
         }
     }

@@ -74,6 +74,54 @@ namespace EFCore.BulkExtensions
             return q + ";";
         }
 
+        public static string MergeTable<TEntity>(TableInfo tableInfo, IQueryable<TEntity> sourceQuery, OperationType operationType) where TEntity : class
+        {
+            string sourceTable = null;
+            string targetTable = tableInfo.FullTableName;
+            List<string> primaryKeys = tableInfo.PrimaryKeys.Select(k => tableInfo.PropertyColumnNamesDict[k]).ToList();
+            List<string> columnsNames = tableInfo.PropertyColumnNamesDict.Values.ToList();
+            List<string> outputColumnsNames = tableInfo.OutputPropertyColumnNamesDict.Values.ToList();
+            List<string> nonIdentityColumnsNames = columnsNames.Where(a => !primaryKeys.Contains(a)).ToList();
+            List<string> insertColumnsNames = tableInfo.HasIdentity ? nonIdentityColumnsNames : columnsNames;
+
+            if (tableInfo.BulkConfig.PreserveInsertOrder)
+            {
+                sourceTable = $"SELECT TOP (100) PERCENT {sourceQuery.ToSql().Substring(7)} ORDER BY {GetCommaSeparatedColumns(primaryKeys)}";
+            }
+            else
+            {
+                sourceTable = sourceQuery.ToSql();
+            }
+
+            string textWITH_HOLDLOCK = tableInfo.BulkConfig.WithHoldlock ? " WITH (HOLDLOCK)" : "";
+
+            var q = $"MERGE {targetTable}{textWITH_HOLDLOCK} AS T " +
+                    $"USING ({sourceTable}) AS S " +
+                    $"ON {GetANDSeparatedColumns(primaryKeys, "T", "S", tableInfo.UpdateByPropertiesAreNullable)}";
+
+            if (operationType == OperationType.Insert || operationType == OperationType.InsertOrUpdate)
+            {
+                q += $" WHEN NOT MATCHED THEN INSERT ({GetCommaSeparatedColumns(insertColumnsNames)})" +
+                     $" VALUES ({GetCommaSeparatedColumns(insertColumnsNames, "S")})";
+            }
+            if (operationType == OperationType.Update || (operationType == OperationType.InsertOrUpdate && nonIdentityColumnsNames.Count > 0))
+            {
+                q += $" WHEN MATCHED THEN UPDATE SET {GetCommaSeparatedColumns(nonIdentityColumnsNames, "T", "S")}";
+            }
+            if (operationType == OperationType.Delete)
+            {
+                q += " WHEN MATCHED THEN DELETE";
+            }
+
+            if (tableInfo.BulkConfig.SetOutputIdentity)
+            {
+                q += $" OUTPUT {GetCommaSeparatedColumns(outputColumnsNames, "INSERTED")}" +
+                     $" INTO {tableInfo.FullTempOutputTableName}";
+            }
+
+            return q + ";";
+        }
+
         public static string GetCommaSeparatedColumns(List<string> columnsNames, string prefixTable = null, string equalsTable = null)
         {
             string commaSeparatedColumns = "";

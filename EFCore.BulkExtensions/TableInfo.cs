@@ -62,6 +62,25 @@ namespace EFCore.BulkExtensions
             return tableInfo;
         }
 
+        public static TableInfo CreateInstance<T>(DbContext context, IQueryable<T> entities, OperationType operationType, BulkConfig bulkConfig)
+        {
+            var tableInfo = new TableInfo
+            {
+                BulkConfig = bulkConfig ?? new BulkConfig()
+            };
+
+            if (operationType != OperationType.Insert)
+            {
+                tableInfo.BulkConfig.UseTempDB = false; // TempDB can only be used with Insert.
+                // Other Operations done with customTemp table.
+                // If using tempdb[#] throws exception: 'Cannot access destination table' (gets Droped too early, probably because transaction ends)
+            }
+
+            tableInfo.LoadData<T>(context, operationType == OperationType.Delete);
+
+            return tableInfo;
+        }
+
         public void LoadData<T>(DbContext context, bool loadOnlyPKColumn)
         {
             var entityType = context.Model.FindEntityType(typeof(T));
@@ -233,6 +252,25 @@ namespace EFCore.BulkExtensions
             sqlBulkCopy.SqlRowsCopied += (sender, e) => {
                 progress?.Invoke((decimal)(e.RowsCopied * 10000 / entities.Count) / 10000); // round to 4 decimal places
             };
+            sqlBulkCopy.BulkCopyTimeout = BulkConfig.BulkCopyTimeout ?? sqlBulkCopy.BulkCopyTimeout;
+            sqlBulkCopy.EnableStreaming = BulkConfig.EnableStreaming;
+
+            if (setColumnMapping)
+            {
+                foreach (var element in this.PropertyColumnNamesDict)
+                {
+                    sqlBulkCopy.ColumnMappings.Add(element.Key, element.Value);
+                }
+            }
+        }
+
+        // IQueryable Support
+        public void SetSqlBulkCopyConfig(SqlBulkCopy sqlBulkCopy, bool setColumnMapping, Action<long, bool> progress)
+        {
+            sqlBulkCopy.DestinationTableName = this.InsertToTempTable ? this.FullTempTableName : this.FullTableName;
+            sqlBulkCopy.BatchSize = BulkConfig.BatchSize;
+            sqlBulkCopy.NotifyAfter = BulkConfig.NotifyAfter ?? BulkConfig.BatchSize;
+            sqlBulkCopy.SqlRowsCopied += (sender, e) => progress?.Invoke(e.RowsCopied, e.Abort); ;
             sqlBulkCopy.BulkCopyTimeout = BulkConfig.BulkCopyTimeout ?? sqlBulkCopy.BulkCopyTimeout;
             sqlBulkCopy.EnableStreaming = BulkConfig.EnableStreaming;
 
