@@ -163,10 +163,22 @@ namespace EFCore.BulkExtensions.Tests
                         {
                             ChangedBy = "User" + 1,
                             ChangedTime = DateTime.Now
-                        }
+                        }/*,
+                        AuditExtended = new AuditExtended
+                        {
+                            CreatedBy = "UserS" + 1,
+                            Remark = "test",
+                            CreatedTime = DateTime.Now
+                        },
+                        AuditExtendedSecond = new AuditExtended
+                        {
+                            CreatedBy = "UserS" + 1,
+                            Remark = "sec",
+                            CreatedTime = DateTime.Now
+                        }*/
                     });
                 }
-                context.BulkInsert(entities);
+                context.BulkInsertOrUpdate(entities);
             }
         }
     }

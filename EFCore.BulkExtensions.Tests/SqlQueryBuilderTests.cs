@@ -14,7 +14,7 @@ namespace EFCore.BulkExtensions.Tests
 
             string expected = "MERGE [dbo].[Item] WITH (HOLDLOCK) AS T USING [dbo].[ItemTemp1234] AS S " +
                               "ON T.[ItemId] = S.[ItemId] " +
-                              "WHEN NOT MATCHED THEN INSERT ([Name]) VALUES (S.[Name]);";
+                              "WHEN NOT MATCHED BY TARGET THEN INSERT ([Name]) VALUES (S.[Name]);";
 
             Assert.Equal(result, expected);
         }
@@ -28,7 +28,7 @@ namespace EFCore.BulkExtensions.Tests
 
             string expected = "MERGE [dbo].[Item] WITH (HOLDLOCK) AS T USING [dbo].[ItemTemp1234] AS S " +
                               "ON T.[ItemId] = S.[ItemId] " +
-                              "WHEN NOT MATCHED THEN INSERT ([Name]) VALUES (S.[Name]) " +
+                              "WHEN NOT MATCHED BY TARGET THEN INSERT ([Name]) VALUES (S.[Name]) " +
                               "WHEN MATCHED THEN UPDATE SET T.[Name] = S.[Name];";
 
             Assert.Equal(result, expected);
@@ -44,6 +44,20 @@ namespace EFCore.BulkExtensions.Tests
             string expected = "MERGE [dbo].[Item] WITH (HOLDLOCK) AS T USING [dbo].[ItemTemp1234] AS S " +
                               "ON T.[ItemId] = S.[ItemId] " +
                               "WHEN MATCHED THEN UPDATE SET T.[Name] = S.[Name];";
+
+            Assert.Equal(result, expected);
+        }
+
+        [Fact]
+        public void SelectJoinTableReadTest()
+        {
+            TableInfo tableInfo = GetTestTableInfo();
+            tableInfo.BulkConfig.UpdateByProperties = new List<string> { nameof(Item.Name) };
+            string result = SqlQueryBuilder.SelectJoinTable(tableInfo);
+
+            string expected = "SELECT S.[ItemId], S.[Name] FROM [dbo].[Item] AS S " +
+                              "JOIN [dbo].[ItemTemp1234] AS J " +
+                              "ON S.[ItemId] = J.[ItemId];";
 
             Assert.Equal(result, expected);
         }

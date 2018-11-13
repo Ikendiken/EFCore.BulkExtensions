@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Caching.Memory;
 using Xunit;
 
 namespace EFCore.BulkExtensions.Tests
@@ -10,6 +12,10 @@ namespace EFCore.BulkExtensions.Tests
     public class EFCoreBulkTestAsync
     {
         protected int EntitiesNumber => 1000;
+
+        private static Func<TestContext, int> ItemsCountQuery = EF.CompileQuery<TestContext, int>(ctx => ctx.Items.Count());
+        private static Func<TestContext, Item> LastItemQuery = EF.CompileQuery<TestContext, Item>(ctx => ctx.Items.LastOrDefault());
+        private static Func<TestContext, IEnumerable<Item>> AllItemsQuery = EF.CompileQuery<TestContext, IEnumerable<Item>>(ctx => ctx.Items.AsNoTracking());
 
         [Theory]
         [InlineData(true, false)]
@@ -20,10 +26,11 @@ namespace EFCore.BulkExtensions.Tests
             await RunInsertAsync(isBulkOperation, insertTo2Tables);
             await RunInsertOrUpdateAsync(isBulkOperation);
             await RunUpdateAsync(isBulkOperation);
+            await RunReadAsync(isBulkOperation);
             await RunDeleteAsync(isBulkOperation);
         }
 
-        private async Task RunInsertAsync(bool isBulkOperation, bool insertTo2Tables = false)
+        private async Task RunInsertAsync(bool isBulkOperation, bool insertTo2Tables)
         {
             using (var context = new TestContext(ContextUtil.GetOptions()))
             {
@@ -76,8 +83,8 @@ namespace EFCore.BulkExtensions.Tests
             }
             using (var context = new TestContext(ContextUtil.GetOptions()))
             {
-                int entitiesCount = context.Items.Count();
-                Item lastEntity = context.Items.LastOrDefault();
+                int entitiesCount = ItemsCountQuery(context);
+                Item lastEntity = LastItemQuery(context);
 
                 Assert.Equal(EntitiesNumber - 1, entitiesCount);
                 Assert.NotNull(lastEntity);
@@ -105,7 +112,8 @@ namespace EFCore.BulkExtensions.Tests
                 }
                 if (isBulkOperation)
                 {
-                    await context.BulkInsertOrUpdateAsync(entities);
+                    var bulkConfig = new BulkConfig() { SetOutputIdentity = true, CalculateStats = true };
+                    await context.BulkInsertOrUpdateAsync(entities, bulkConfig);
                 }
                 else
                 {
@@ -115,8 +123,8 @@ namespace EFCore.BulkExtensions.Tests
             }
             using (var context = new TestContext(ContextUtil.GetOptions()))
             {
-                int entitiesCount = context.Items.Count();
-                Item lastEntity = context.Items.LastOrDefault();
+                int entitiesCount = ItemsCountQuery(context);
+                Item lastEntity = LastItemQuery(context);
 
                 Assert.Equal(EntitiesNumber, entitiesCount);
                 Assert.NotNull(lastEntity);
@@ -129,10 +137,10 @@ namespace EFCore.BulkExtensions.Tests
             using (var context = new TestContext(ContextUtil.GetOptions()))
             {
                 int counter = 1;
-                var entities = context.Items.AsNoTracking().ToList();
+                var entities = AllItemsQuery(context).ToList();
                 foreach (var entity in entities)
                 {
-                    entity.Name = "name Update " + counter++;
+                    entity.Description = "Desc Update " + counter++;
                     entity.TimeUpdated = DateTime.Now;
                 }
                 if (isBulkOperation)
@@ -147,12 +155,43 @@ namespace EFCore.BulkExtensions.Tests
             }
             using (var context = new TestContext(ContextUtil.GetOptions()))
             {
-                int entitiesCount = context.Items.Count();
-                Item lastEntity = context.Items.LastOrDefault();
+                int entitiesCount = ItemsCountQuery(context);
+                Item lastEntity = LastItemQuery(context);
 
                 Assert.Equal(EntitiesNumber, entitiesCount);
                 Assert.NotNull(lastEntity);
-                Assert.Equal("name Update " + EntitiesNumber, lastEntity.Name);
+                Assert.Equal("Desc Update " + EntitiesNumber, lastEntity.Description);
+            }
+        }
+
+        private async Task RunReadAsync(bool isBulkOperation)
+        {
+            using (var context = new TestContext(ContextUtil.GetOptions()))
+            {
+                var entities = new List<Item>();
+
+                for (int i = 1; i < EntitiesNumber; i++)
+                {
+                    var entity = new Item
+                    {
+                        Name = "name " + i,
+                    };
+                    entities.Add(entity);
+                }
+
+                await context.BulkReadAsync(
+                    entities,
+                    new BulkConfig
+                    {
+                        UseTempDB = false,
+                        UpdateByProperties = new List<string> { nameof(Item.Name) }
+                    }
+                );
+
+                Assert.Equal(1, entities[0].ItemId);
+                Assert.Equal(0, entities[1].ItemId);
+                Assert.Equal(3, entities[2].ItemId);
+                Assert.Equal(0, entities[3].ItemId);
             }
         }
 
@@ -160,7 +199,7 @@ namespace EFCore.BulkExtensions.Tests
         {
             using (var context = new TestContext(ContextUtil.GetOptions()))
             {
-                var entities = context.Items.AsNoTracking().ToList();
+                var entities = AllItemsQuery(context).ToList();
                 // ItemHistories will also be deleted because of Relationship - ItemId (Delete Rule: Cascade)
                 if (isBulkOperation)
                 {
@@ -174,8 +213,8 @@ namespace EFCore.BulkExtensions.Tests
             }
             using (var context = new TestContext(ContextUtil.GetOptions()))
             {
-                int entitiesCount = context.Items.Count();
-                Item lastEntity = context.Items.LastOrDefault();
+                int entitiesCount = ItemsCountQuery(context);
+                Item lastEntity = LastItemQuery(context);
 
                 Assert.Equal(0, entitiesCount);
                 Assert.Null(lastEntity);

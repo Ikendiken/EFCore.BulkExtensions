@@ -19,7 +19,12 @@ namespace EFCore.BulkExtensions
 
         public bool UseTempDB { get; set; }
 
+        public bool TrackingEntities { get; set; }
+
         public bool WithHoldlock { get; set; } = true;
+
+        public bool CalculateStats { get; set; }
+        public StatsInfo StatsInfo { get; set; }
 
         public List<string> PropertiesToInclude { get; set; }
 
@@ -28,5 +33,14 @@ namespace EFCore.BulkExtensions
         public List<string> UpdateByProperties { get; set; }
 
         public SqlBulkCopyOptions SqlBulkCopyOptions { get; set; }
+
+        protected bool HasOutput { get; set; }
+    }
+
+    public class StatsInfo
+    {
+        public int StatsNumberInserted { get; set; }
+
+        public int StatsNumberUpdated { get; set; }
     }
 }
